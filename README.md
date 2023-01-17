@@ -3,7 +3,7 @@ Object Detection have always been a fundamental chase in the Computer Vision com
 
 I use Global Attribution Attention Heatmaps to localize the object in the image using Diffussion Attentive Attention Maps to find these portions. Overlaying these objects with objects detected by extreme classification models like Detic posses huge potential to improve the Object Detection Models to detect more classes than ever detected.
 
-** This work is currently under progress. Results will be updated as I go along finding interesting results. To show how my method shows some preliminary promising results. Below are few examples.**
+**This work is currently under progress. Results will be updated as I go along finding interesting results. To show how my method shows some preliminary promising results. Below are few examples.**
 
 # Diffusion-Based Object Detection
 
