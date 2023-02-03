@@ -106,13 +106,14 @@ def run(i, rank, batch, nlp, BATCH_SIZE):
     print('Processing captions...')
 
     # start processing the train captions subset
-    # try: # The chances of an error here lies in this portion only
+    try: # The chances of an error here lies in this portion only
     processed_train = clean_prompt(curr_split_data, nlp)
-    # except Exception as e:
-    #   print()
-    #   print(f'Encountered Error: {e} in Subset No. {i+1}')
-    #   print('Skipping...')
-    #   return
+    except Exception as e:
+      print()
+      print(f'Encountered Error: {e} in Subset No. {i+1}')
+      print(f'(If too many times you see this message! KeyboardInterrupt and inspect the error please)')
+      print('Skipping...')
+      return
 
     print()
     print(f'Updating captions...')
