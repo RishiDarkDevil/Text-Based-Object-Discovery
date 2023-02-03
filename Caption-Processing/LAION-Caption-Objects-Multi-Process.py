@@ -1,3 +1,13 @@
+# How to run?
+# 1) Install Dependencies
+# !pip install stanza
+# !pip install ftfy regex tqdm
+# !pip install datasets==2.9
+# 2) Run in Terminal
+# !python LAION-Caption-Objects-Multi-Process.py -n <NUMBER OF NODES> -g <NUMBER OF GPUS PER NODE>
+# 3) Want to know more options available?
+# Check the main function below for the possible arguments
+
 # General
 import os
 import gc
@@ -90,6 +100,7 @@ def clean_prompt(sentences, nlp):
   
   return fin_prompt, obj_prompt
 
+# Processes the current batch for the process which calls it
 def run(i, rank, batch, nlp, BATCH_SIZE):
   try:
     # Stores the current processed batch
@@ -163,6 +174,7 @@ def run(i, rank, batch, nlp, BATCH_SIZE):
     
   print('Done!')
 
+# Prepare the dataset for each process i.e. assign the shards or portions of data to be processed
 def prepare(data, rank, world_size, batch_size, pin_memory=False, num_workers=0):
   
   # Choose the data shards to stream from for current rank in world size
@@ -173,6 +185,7 @@ def prepare(data, rank, world_size, batch_size, pin_memory=False, num_workers=0)
   
   return dataloader
 
+# Each Individual Process Runs this function - Ideally one process per GPU
 def infer(gpu, args):
 
   print(f'GPU: #{gpu}')
@@ -208,6 +221,7 @@ def infer(gpu, args):
     # Free up space after everything done
     del data, dataloader, nlp
 
+# Parses Argument and kicks off the main process which will spawn further children processes
 def main():
 
   # parsing command line
