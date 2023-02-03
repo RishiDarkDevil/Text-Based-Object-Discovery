@@ -24,40 +24,14 @@ import torch.nn as nn
 
 # Caption-Processing
 from nltk.corpus import stopwords
-
-# Loading Models and Stopwords
-print('Loading all the required models.')
 import nltk
-nltk.download('stopwords')
-nltk.download('wordnet')
-nltk.download('punkt')
-nltk.download('omw-1.4')
-nltk.download('averaged_perceptron_tagger')
 
 # POS-Tagging
 import stanza
-stanza.download('en')
-
-# Create Directory
-if not os.path.exists('LAION'):
-  os.mkdir('LAION')
-
-# Loading Dataset and Model
-dataset = load_dataset('laion/laion2B-en', split='train', streaming=True)
-BATCH_SIZE = 10000 # SAVE_AFTER = BATCH_SIZE i.e. after processing these many prompts we will save the results.
-nlp = stanza.Pipeline(lang='en', processors='tokenize,mwt,pos,lemma', tokenize_no_ssplit=True, verbose=True, pos_batch_size=BATCH_SIZE, use_gpu='cuda:0') # The POS Tagger Model
 
 # For processing data in batches
 def group_batch(batch):
   return {k: [v] for k, v in batch.items()}
-
-data = dataset.map(group_batch, remove_columns=['SAMPLE_ID', 'URL', 'HEIGHT', 'WIDTH', 'LICENSE', 'NSFW', 'similarity'])
-
-# treebank-specific POS (XPOS) tags to keep, other POS tagged tokens will not be retained
-keep_pos_tags = ['NN', 'NNS', 'NNP', 'NNPS']
-
-# Stopwords
-stpwords = set(stopwords.words('english'))
 
 # extract parts of speech
 def extract_pos(doc):
@@ -82,7 +56,13 @@ def extract_lemma(doc):
   return parsed_text
 
 # cleans a list of prompt
-def clean_prompt(sentences):
+def clean_prompt(sentences, nlp):
+
+  # treebank-specific POS (XPOS) tags to keep, other POS tagged tokens will not be retained
+  keep_pos_tags = ['NN', 'NNS', 'NNP', 'NNPS']
+
+  # Stopwords
+  stpwords = set(stopwords.words('english'))
 
   # convert the sentences to lower case
   sentences_lc = [sentence.lower() for sentence in sentences]
@@ -110,7 +90,7 @@ def clean_prompt(sentences):
   
   return fin_prompt, obj_prompt
 
-def run(i, rank, batch):
+def run(i, rank, batch, nlp, BATCH_SIZE):
   try:
     # Stores the current processed batch
     caption_data_train_file = {'annotations':[]} # For storing results
@@ -127,7 +107,7 @@ def run(i, rank, batch):
 
     # start processing the train captions subset
     # try: # The chances of an error here lies in this portion only
-    processed_train = clean_prompt(curr_split_data)
+    processed_train = clean_prompt(curr_split_data, nlp)
     # except Exception as e:
     #   print()
     #   print(f'Encountered Error: {e} in Subset No. {i+1}')
@@ -182,7 +162,7 @@ def run(i, rank, batch):
     
   print('Done!')
 
-def prepare(rank, world_size, batch_size=BATCH_SIZE, pin_memory=False, num_workers=0):
+def prepare(data, rank, world_size, batch_size, pin_memory=False, num_workers=0):
   
   # Choose the data shards to stream from for current rank in world size
   dat = split_dataset_by_node(data, rank=rank, world_size=world_size)
@@ -201,22 +181,31 @@ def infer(gpu, args):
 
   # setting the device to use
   device = f"cuda:{gpu}"
-
-  print('Loading Model...', device)
   
-  # loads the text processing pipeline
-  nlp = stanza.Pipeline(lang='en', processors='tokenize,mwt,pos,lemma', tokenize_no_ssplit=True, verbose=True, pos_batch_size=args.pos_batch, use_gpu=device)
+  with torch.cuda.device(gpu):
+    
+    print(f'Loading Model...{device}')
+    torch.cuda.set_device(device)
 
-  # prepare the dataloader
-  dataloader = prepare(gpu, args.world_size)
+    # Loading Dataset and Model
+    dataset = load_dataset('laion/laion2B-en', split='train', streaming=True)
+    data = dataset.map(group_batch, remove_columns=['SAMPLE_ID', 'URL', 'HEIGHT', 'WIDTH', 'LICENSE', 'NSFW', 'similarity'])
 
-  print('Processing captions...')
-  # Processing the data from the dataloader in batches
-  k = 0
-  for batch in tqdm(dataloader):
-    print(f'GPU: {gpu}')
-    run(k, gpu, batch)
-    k += 1
+    # loads the text processing pipeline
+    nlp = stanza.Pipeline(lang='en', processors='tokenize,mwt,pos,lemma', tokenize_no_ssplit=True, verbose=True, pos_batch_size=args.pos_batch, use_gpu=True)
+
+    # prepare the dataloader
+    dataloader = prepare(data, gpu, args.world_size, args.batch_size)
+
+    print('Processing captions...')
+    # Processing the data from the dataloader in batches
+    k = 0
+    for batch in tqdm(dataloader):
+      run(k, gpu, batch, nlp, args.batch_size)
+      k += 1
+
+    # Free up space after everything done
+    del data, dataloader, nlp
 
 def main():
 
@@ -233,10 +222,23 @@ def main():
                       help='batch size for each process')
   args = parser.parse_args()
 
-  BATCH_SIZE=args.batch_size
+  BATCH_SIZE=args.batch_size # SAVE_AFTER = BATCH_SIZE i.e. after processing these many prompts we will save the results.
   
   # Calculating the total number of processes i.e. #GPUS x #Nodes
   args.world_size = args.gpus * args.nodes
+
+  # Create Directory
+  if not os.path.exists('LAION'):
+    os.mkdir('LAION')
+
+  # Loading Models and Stopwords
+  print('Loading all the required NLTK models')
+  nltk.download('stopwords')
+  nltk.download('wordnet')
+  nltk.download('punkt')
+  nltk.download('omw-1.4')
+  nltk.download('averaged_perceptron_tagger')
+  stanza.download('en')
 
   # Spawning the processes
   print('***Inference***')
