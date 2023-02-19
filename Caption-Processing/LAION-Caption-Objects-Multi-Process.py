@@ -118,7 +118,7 @@ def run(i, rank, batch, nlp, BATCH_SIZE):
 
     # start processing the train captions subset
     try: # The chances of an error here lies in this portion only
-    processed_train = clean_prompt(curr_split_data, nlp)
+      processed_train = clean_prompt(curr_split_data, nlp)
     except Exception as e:
       print()
       print(f'Encountered Error: {e} in Subset No. {i+1}')
