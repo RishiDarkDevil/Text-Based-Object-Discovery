@@ -1,5 +1,6 @@
 # How to run?
 # 1) Install Dependencies
+# !pip install transformers
 # !pip install stanza
 # !pip install ftfy regex tqdm
 # !pip install datasets==2.9
@@ -33,6 +34,7 @@ import torch
 import torch.nn as nn
 
 # Caption-Processing
+from transformers import CLIPTokenizer
 from nltk.corpus import stopwords
 import nltk
 
@@ -66,7 +68,7 @@ def extract_lemma(doc):
   return parsed_text
 
 # cleans a list of prompt
-def clean_prompt(sentences, nlp):
+def clean_prompt(sentences, nlp, tokenizer):
 
   # treebank-specific POS (XPOS) tags to keep, other POS tagged tokens will not be retained
   keep_pos_tags = ['NN', 'NNS', 'NNP', 'NNPS']
@@ -74,11 +76,11 @@ def clean_prompt(sentences, nlp):
   # Stopwords
   stpwords = set(stopwords.words('english'))
 
-  # convert the sentences to lower case
-  sentences_lc = [sentence.lower() for sentence in sentences]
+  # convert the sentences to lower case and tokenizes the sentences to be passed onto Stanza for POS Tagging
+  sentences_lc_tokenized = tokenizer.batch_decode([[word for word in sent[1:-1]] for sent in tokenizer(sentences)['input_ids'] if len(sent) <= tokenizer.model_max_length])
 
   # stanza accepts only a single string instead of list of strings. So, we have set the tokenize_no_ssplit=True and have to join each sentence with double newline
-  sentence_string = "\n\n".join(sentences_lc)
+  sentence_string = "\n\n".join(sentences_lc_tokenized)
 
   # tokenizes, lemmatizes and pos tags the prompt
   with torch.no_grad():
@@ -98,10 +100,10 @@ def clean_prompt(sentences, nlp):
   
   del pos_tagged_prompt, lemmatized_prompt
   
-  return fin_prompt, obj_prompt
+  return sentences_lc_tokenized, fin_prompt, obj_prompt
 
 # Processes the current batch for the process which calls it
-def run(i, rank, batch, nlp, BATCH_SIZE):
+def run(i, rank, batch, nlp, tokenizer, BATCH_SIZE):
   try:
     # Stores the current processed batch
     caption_data_train_file = {'annotations':[]} # For storing results
@@ -118,7 +120,7 @@ def run(i, rank, batch, nlp, BATCH_SIZE):
 
     # start processing the train captions subset
     try: # The chances of an error here lies in this portion only
-      processed_train = clean_prompt(curr_split_data, nlp)
+      processed_train = clean_prompt(curr_split_data, nlp, tokenizer)
     except Exception as e:
       print()
       print(f'Encountered Error: {e} in Subset No. {i+1}')
@@ -129,8 +131,8 @@ def run(i, rank, batch, nlp, BATCH_SIZE):
     print()
     print(f'Updating captions...')
     # Processing each prompt and updating annotation file for train set
+    curr_split_data, cleaned_prompts, object_prompts = processed_train
     update_data = [{'caption': prompt} for prompt in curr_split_data]
-    cleaned_prompts, object_prompts = processed_train
 
     # Garbage Collection
     del curr_split_data, processed_train
@@ -205,8 +207,14 @@ def infer(gpu, args):
     dataset = load_dataset('laion/laion2B-en', split='train', streaming=True)
     data = dataset.map(group_batch, remove_columns=['SAMPLE_ID', 'URL', 'HEIGHT', 'WIDTH', 'LICENSE', 'NSFW', 'similarity'])
 
+    DIFFUSION_MODEL_PATH = 'stabilityai/stable-diffusion-2-base' # Set the model path to load the diffusion model from
+
+    # loads the CLIPTokenizer with the configuration same as that used in the Diffusion Model
+    # Using Stanza Tokenizer might generate different tokens compared to the CLIP, leading to misalignment in DAAM - Causing Error
+    tokenizer = CLIPTokenizer.from_pretrained(DIFFUSION_MODEL_PATH, subfolder="tokenizer")
+
     # loads the text processing pipeline
-    nlp = stanza.Pipeline(lang='en', processors='tokenize,mwt,pos,lemma', tokenize_no_ssplit=True, verbose=True, pos_batch_size=args.pos_batch, use_gpu=True)
+    nlp = stanza.Pipeline(lang='en', processors='tokenize,mwt,pos,lemma', tokenize_no_ssplit=True, tokenize_pretokenized=True, verbose=True, pos_batch_size=6500)
 
     # prepare the dataloader
     dataloader = prepare(data, gpu, args.world_size, args.batch_size)
@@ -215,7 +223,7 @@ def infer(gpu, args):
     # Processing the data from the dataloader in batches
     k = 0
     for batch in tqdm(dataloader):
-      run(k, gpu, batch, nlp, args.batch_size)
+      run(k, gpu, batch, nlp, tokenizer, args.batch_size)
       k += 1
 
     # Free up space after everything done
