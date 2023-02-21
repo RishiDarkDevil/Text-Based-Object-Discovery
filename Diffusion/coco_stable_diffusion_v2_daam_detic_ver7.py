@@ -126,11 +126,14 @@ I use `COCO` Dataset format to store the bboxes and segmentation for each image.
 
 DEVICE = 'cuda' # device
 NUM_IMAGES_PER_PROMPT = 4 # Number of images to be generated per prompt
+STRENGTH = 0.3 # The noise to add to original image
 NUM_INFERENCE_STEPS = 50 # Number of inference steps to the Diffusion Model
 NAME_OF_DATASET = 'COCO Stable Diffusion 2 Dataset' # Name of the generated dataset
-SAVE_AFTER_NUM_IMAGES = 5 # Number of images after which the annotation and caption files will be saved
+SAVE_AFTER_NUM_IMAGES = 1 # Number of images after which the annotation and caption files will be saved
 NMS_OVERLAP_THRESHOLD = 0.5 # Non-Max Suppression Threshold
 BLUR_KERNEL_SIZE = (5, 5) # The size of the kernel to be used for blurring the heatmap before binary thresholding
+PRE_NMS_SMALL_SEGMENT_THRESH = 30 # For filtering small segments, higher the threshold more smaller contours will be allowed (before applying NMS)
+PRE_NMS_SMALL_BOX_THRESH = 30 # For filtering small bboxes, higher the threshold more smaller boxes will be allowed (before applying NMS)
 SMALL_SEGMENT_THRESH = 30 # For filtering small segments, higher the threshold more smaller segments will be allowed (Within a bbox operation for each category in an image)
 SMALL_BOX_THRESH = 30 # For filtering small boxes, higher the threshold more small boxes will be allowed (Between bboxes operation for each category in an image)
 
@@ -238,7 +241,7 @@ def non_max_suppression_fast(boxes, overlapThresh):
   # this is important since we'll be doing a bunch of divisions
   if boxes.dtype.kind == "i":
     boxes = boxes.astype("float")
-  # initialize the list of picked indexes	
+  # initialize the list of picked indexes 
   pick = []
   pick2idx = dict()
   # grab the coordinates of the bounding boxes
@@ -265,20 +268,51 @@ def non_max_suppression_fast(boxes, overlapThresh):
     yy1 = np.maximum(y1[i], y1[idxs[:last]])
     xx2 = np.minimum(x2[i], x2[idxs[:last]])
     yy2 = np.minimum(y2[i], y2[idxs[:last]])
-    # compute the width and height of the bounding box
+    # compute the width and height of the intersection bounding box
     w = np.maximum(0, xx2 - xx1 + 1)
     h = np.maximum(0, yy2 - yy1 + 1)
     # compute the ratio of overlap
     overlap = (w * h) / area[idxs[:last]]
     # delete all indexes from the index list that have
     to_delete = np.concatenate(([last], np.where(overlap >= overlapThresh)[0]))
-    idxs = np.delete(idxs, to_delete)
     # the boxes to be deleted are mapped to a box so the box to which it is mapped
     # should also be in the dictionary else it will be omitted all together
-    pick2idx[i] = list(to_delete) + [i]
+    pick2idx[i] = [idxs[id] for id in list(to_delete)] + [i]
+    # removing the bounding boxes and moving towards doing NMS on remaining ones
+    idxs = np.delete(idxs, to_delete)
 
   # return only the bounding box idx that were picked
   return pick, pick2idx
+
+# Detects connected components to prevent bounding boxes overlapping each other even after NMS
+# Not in use right now
+def getRoots(aNeigh):
+  def findRoot(aNode,aRoot):
+    while aNode != aRoot[aNode][0]:
+      aNode = aRoot[aNode][0]
+    return (aNode,aRoot[aNode][1])
+  myRoot = {} 
+  for myNode in aNeigh.keys():
+    myRoot[myNode] = (myNode,0)  
+  for myI in aNeigh: 
+    for myJ in aNeigh[myI]: 
+      (myRoot_myI,myDepthMyI) = findRoot(myI,myRoot) 
+      (myRoot_myJ,myDepthMyJ) = findRoot(myJ,myRoot) 
+      if myRoot_myI != myRoot_myJ: 
+        myMin = myRoot_myI
+        myMax = myRoot_myJ 
+        if  myDepthMyI > myDepthMyJ: 
+          myMin = myRoot_myJ
+          myMax = myRoot_myI
+        myRoot[myMax] = (myMax,max(myRoot[myMin][1]+1,myRoot[myMax][1]))
+        myRoot[myMin] = (myRoot[myMax][0],-1) 
+  myToRet = {}
+  for myI in aNeigh: 
+    if myRoot[myI][0] == myI:
+      myToRet[myI] = []
+  for myI in aNeigh: 
+    myToRet[findRoot(myI,myRoot)[0]].append(myI) 
+  return myToRet 
 
 # Frees up GPU to help reduce memory leak
 def optimize_gpu():
